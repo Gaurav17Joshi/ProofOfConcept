@@ -1,0 +1,9 @@
+matplotlib
+bilby
+celerite
+numpy
+scipy
+astropy
+setuptools
+stingray
+george
