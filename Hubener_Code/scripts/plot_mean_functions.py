@@ -1,3 +1,5 @@
+# Plots the mean functions fig of QPOEstimation paper
+
 import matplotlib.pyplot as plt
 import numpy as np
 

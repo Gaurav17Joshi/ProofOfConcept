@@ -1,3 +1,5 @@
+# Pitfalls paper
+
 import bilby.core.result
 import matplotlib
 import matplotlib.pyplot as plt

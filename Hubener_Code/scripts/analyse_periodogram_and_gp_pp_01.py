@@ -1,3 +1,5 @@
+# Makes fig 8 of QPOEstimation paper
+
 import json
 import sys
 

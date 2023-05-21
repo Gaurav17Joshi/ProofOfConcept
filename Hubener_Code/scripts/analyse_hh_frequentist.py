@@ -1,3 +1,5 @@
+# No plot from paper
+
 import QPOEstimation
 import numpy as np
 

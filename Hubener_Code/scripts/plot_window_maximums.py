@@ -1,3 +1,5 @@
+# Does not seem useful
+
 import json
 import bilby
 import matplotlib.pyplot as plt

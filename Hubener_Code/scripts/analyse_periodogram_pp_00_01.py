@@ -1,3 +1,6 @@
+# all these analyse_periodogram_pp scripts are used to analyse the results of the 
+# periodogram post-processing, used in pitfalls paper.
+
 import json
 import sys
 

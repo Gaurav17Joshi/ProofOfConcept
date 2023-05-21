@@ -1,3 +1,5 @@
+# Fig 16 of QPOEstimation paper
+
 import numpy as np
 import bilby
 from QPOEstimation.result import GPResult, power_qpo

@@ -1,3 +1,5 @@
+# Pitfalls of Periodogram Analysis
+
 import os
 import sys
 from pathlib import Path

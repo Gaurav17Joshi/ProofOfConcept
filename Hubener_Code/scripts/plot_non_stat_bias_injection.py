@@ -1,3 +1,5 @@
+# Can also be Fig 8
+
 import bilby.core.result
 import matplotlib.pyplot as plt
 import numpy as np

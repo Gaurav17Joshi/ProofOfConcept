@@ -1,3 +1,5 @@
+# Fig 5,6 of QPOEstimation paper
+
 import celerite
 import matplotlib
 import matplotlib.pyplot as plt
