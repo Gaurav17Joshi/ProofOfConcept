@@ -36,29 +36,36 @@ ln_bfs_qpo_inj = []
 ln_bfs_red_noise_inj = []
 ln_bfs_high_amp_qpo_inj = []
 
-# for injection_id in range(0, 1000):
-#     print(injection_id)
-#     label = get_injection_label(run_mode="entire_segment", injection_id=injection_id) + "_1_skew_gaussians"
-#     label_high_qpo_amp = get_injection_label(
-#         run_mode="entire_segment", injection_id=injection_id + 1000) + "_1_skew_gaussians"
-#     try:
-#         # res_qpo_qpo = GPResult.from_json(outdir=outdir_qpo_qpo, label=label)
-#         # res_qpo_red_noise = GPResult.from_json(outdir=outdir_qpo_red_noise, label=label)
-#         res_high_amp_qpo_qpo = GPResult.from_json(outdir=outdir_qpo_qpo, label=label_high_qpo_amp)
-#         res_high_amp_qpo_red_noise = GPResult.from_json(outdir=outdir_qpo_red_noise, label=label_high_qpo_amp)
-#         # res_red_noise_red_noise = GPResult.from_json(outdir=outdir_red_noise_red_noise, label=label)
-#         # res_red_noise_qpo = GPResult.from_json(outdir=outdir_red_noise_qpo, label=label)
-#         # ln_bfs_qpo_inj.append(res_qpo_qpo.log_evidence - res_qpo_red_noise.log_evidence)
-#         ln_bfs_high_amp_qpo_inj.append(res_high_amp_qpo_qpo.log_evidence - res_high_amp_qpo_red_noise.log_evidence)
-#         # ln_bfs_red_noise_inj.append(res_red_noise_qpo.log_evidence - res_red_noise_red_noise.log_evidence)
-#         print(ln_bfs_high_amp_qpo_inj[-1])
-#     except (OSError, FileNotFoundError) as e:
-#         print(e)
-#         continue
+###################################### This part is to be commented out if the results are already saved
 
-# np.savetxt("results/ln_bfs_qpo_inj_mss.txt", ln_bfs_qpo_inj)
-# np.savetxt("results/ln_bfs_high_amp_qpo_inj_mss.txt", ln_bfs_high_amp_qpo_inj)
-# np.savetxt("results/ln_bfs_red_noise_inj_mss.txt", ln_bfs_red_noise_inj)
+# 1000 samples
+for injection_id in range(0, 1000):
+    print(injection_id)
+    label = get_injection_label(run_mode="entire_segment", injection_id=injection_id) + "_1_skew_gaussians"
+    label_high_qpo_amp = get_injection_label(
+        run_mode="entire_segment", injection_id=injection_id + 1000) + "_1_skew_gaussians"
+    try:
+        # res_qpo_qpo = GPResult.from_json(outdir=outdir_qpo_qpo, label=label)
+        # res_qpo_red_noise = GPResult.from_json(outdir=outdir_qpo_red_noise, label=label)
+        # What type of object is res_qpo_qpo?
+        res_high_amp_qpo_qpo = GPResult.from_json(outdir=outdir_qpo_qpo, label=label_high_qpo_amp)
+        res_high_amp_qpo_red_noise = GPResult.from_json(outdir=outdir_qpo_red_noise, label=label_high_qpo_amp)
+        # res_red_noise_red_noise = GPResult.from_json(outdir=outdir_red_noise_red_noise, label=label)
+        # res_red_noise_qpo = GPResult.from_json(outdir=outdir_red_noise_qpo, label=label)
+#   Appending the difference of log_evidences
+        # ln_bfs_qpo_inj.append(res_qpo_qpo.log_evidence - res_qpo_red_noise.log_evidence)
+        ln_bfs_high_amp_qpo_inj.append(res_high_amp_qpo_qpo.log_evidence - res_high_amp_qpo_red_noise.log_evidence)
+        # ln_bfs_red_noise_inj.append(res_red_noise_qpo.log_evidence - res_red_noise_red_noise.log_evidence)
+        print(ln_bfs_high_amp_qpo_inj[-1])
+    except (OSError, FileNotFoundError) as e:
+        print(e)
+        continue
+
+np.savetxt("results/ln_bfs_qpo_inj_mss.txt", ln_bfs_qpo_inj)
+np.savetxt("results/ln_bfs_high_amp_qpo_inj_mss.txt", ln_bfs_high_amp_qpo_inj)
+np.savetxt("results/ln_bfs_red_noise_inj_mss.txt", ln_bfs_red_noise_inj)
+
+######################################
 
 ln_bfs_qpo_inj = np.loadtxt("results/ln_bfs_qpo_inj_mss.txt")
 ln_bfs_high_amp_qpo_inj = np.loadtxt("results/ln_bfs_high_amp_qpo_inj_mss.txt")
