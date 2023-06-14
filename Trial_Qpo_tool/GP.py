@@ -1,60 +1,203 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
 import jax
 import jax.numpy as jnp
+import functools
+import tensorflow_probability.substrates.jax as tfp
+
 from jax import jit, random
 
 from tinygp import GaussianProcess, kernels
 from stingray import Lightcurve
 
-jax.config.update("jax_enable_x64", True)
-
-import functools
-
-import tensorflow_probability.substrates.jax as tfp
-tfpd = tfp.distributions
-tfpb = tfp.bijectors
-
 from jaxns import ExactNestedSampler
 from jaxns import TerminationCondition
+
 # from jaxns import analytic_log_evidence
 from jaxns import Prior, Model
 
+jax.config.update("jax_enable_x64", True)
+
+tfpd = tfp.distributions
+tfpb = tfp.bijectors
+
 __all__ = ["GP", "GPResult"]
 
-# To be removed
-
-#    return GaussianProcess( kernel, X, mean=mean, diag = )
 
 def get_kernel(kernel_type, kernel_params):
+    """
+    Function for producing the kernel for the Gaussian Process.
+    Returns the selected Tinygp kernel
+
+    Parameters
+    ----------
+    kernel_type: string
+        The type of kernel to be used for the Gaussian Process
+        To be selected from the kernels already implemented
+
+    kernel_params: dict
+        Dictionary containing the parameters for the kernel
+        Should contain the parameters for the selected kernel
+
+    """
     if kernel_type == "QPO_plus_RN":
         kernel = kernels.quasisep.Exp(
-                scale = 1/kernel_params["crn"], sigma = (kernel_params["arn"])**0.5) + kernels.quasisep.Celerite(
-                a = kernel_params["aqpo"], b = 0.0, c = kernel_params["cqpo"], d = 2*jnp.pi*kernel_params["freq"])
+            scale=1 / kernel_params["crn"], sigma=(kernel_params["arn"]) ** 0.5
+        ) + kernels.quasisep.Celerite(
+            a=kernel_params["aqpo"],
+            b=0.0,
+            c=kernel_params["cqpo"],
+            d=2 * jnp.pi * kernel_params["freq"],
+        )
         return kernel
     elif kernel_type == "RN":
         kernel = kernels.quasisep.Exp(
-                scale = 1/kernel_params["crn"], sigma = (kernel_params["arn"])**0.5)
+            scale=1 / kernel_params["crn"], sigma=(kernel_params["arn"]) ** 0.5
+        )
         return kernel
 
+
 def get_mean(mean_type, mean_params):
+    """
+    Function for producing the mean for the Gaussian Process.
+
+    Parameters
+    ----------
+    mean_type: string
+        The type of mean to be used for the Gaussian Process
+        To be selected from the mean functions already implemented
+
+    mean_params: dict
+        Dictionary containing the parameters for the mean
+        Should contain the parameters for the selected mean
+
+    """
     if mean_type == "gaussian":
-        mean = functools.partial(_gaussian, mean_params = mean_params)
+        mean = functools.partial(_gaussian, mean_params=mean_params)
     elif mean_type == "exponential":
-        mean = functools.partial(_exponential, mean_params = mean_params)
+        mean = functools.partial(_exponential, mean_params=mean_params)
     elif mean_type == "constant":
-        mean = functools.partial(_constant, mean_params = mean_params)
+        mean = functools.partial(_constant, mean_params=mean_params)
+    elif mean_type == "skew_gaussian":
+        mean = functools.partial(_skew_gaussian, mean_params=mean_params)
+    elif mean_type == "skew_exponential":
+        mean = functools.partial(_skew_exponential, mean_params=mean_params)
     return mean
 
+
 def _gaussian(t, mean_params):
-    return mean_params["A"] * jnp.exp(-((t - mean_params["t0"])**2)/(2*(mean_params["sig"]**2)))
+    """A gaussian flare shape.
+
+    Parameters
+    ----------
+    t:  jnp.ndarray
+        The time coordinates.
+    A:  jnp.int
+        Amplitude of the flare.
+    t0:
+        The location of the maximum.
+    sig1:
+        The width parameter for the gaussian.
+
+    Returns
+    -------
+    The y values for the gaussian flare.
+    """
+    return mean_params["A"] * jnp.exp(
+        -((t - mean_params["t0"]) ** 2) / (2 * (mean_params["sig"] ** 2))
+    )
+
 
 def _exponential(t, mean_params):
-    return mean_params["A"] * jnp.exp(- jnp.abs((t - mean_params["t0"]))/mean_params["sig"] )
+    """An exponential flare shape.
+
+    Parameters
+    ----------
+    t:  jnp.ndarray
+        The time coordinates.
+    A:  jnp.int
+        Amplitude of the flare.
+    t0:
+        The location of the maximum.
+    sig1:
+        The width parameter for the exponential.
+
+    Returns
+    -------
+    The y values for exponential flare.
+    """
+    return mean_params["A"] * jnp.exp(-jnp.abs((t - mean_params["t0"])) / mean_params["sig"])
+
 
 def _constant(t, mean_params):
+    """A constant mean shape.
+
+    Parameters
+    ----------
+    t:  jnp.ndarray
+        The time coordinates.
+    A:  jnp.int
+        Constant amplitude of the flare.
+
+    Returns
+    -------
+    The constant value.
+    """
     return mean_params["A"] * jnp.ones_like(t)
+
+
+def _skew_gaussian(t, mean_params):
+    """A skew gaussian flare shape.
+
+    Parameters
+    ----------
+    t:  jnp.ndarray
+        The time coordinates.
+    A:  jnp.int
+        Amplitude of the flare.
+    t0:
+        The location of the maximum.
+    sig1:
+        The width parameter for the rising edge.
+    sig2:
+        The width parameter for the falling edge.
+
+    Returns
+    -------
+    The y values for skew gaussian flare.
+    """
+    return mean_params["A"] * jnp.where(
+        t > mean_params["t0"],
+        jnp.exp(-((t - mean_params["t0"]) ** 2) / (2 * (mean_params["sig2"] ** 2))),
+        jnp.exp(-((t - mean_params["t0"]) ** 2) / (2 * (mean_params["sig1"] ** 2))),
+    )
+
+
+def _skew_exponential(t, mean_params):
+    """A skew exponential flare shape.
+
+    Parameters
+    ----------
+    t:  jnp.ndarray
+        The time coordinates.
+    A:  jnp.int
+        Amplitude of the flare.
+    t0:
+        The location of the maximum.
+    sig1:
+        The width parameter for the rising edge.
+    sig2:
+        The width parameter for the falling edge.
+
+    Returns
+    -------
+    The y values for exponential flare.
+    """
+    return mean_params["A"] * jnp.where(
+        t > mean_params["t0"],
+        jnp.exp(-(t - mean_params["t0"]) / mean_params["sig2"]),
+        jnp.exp((t - mean_params["t0"]) / mean_params["sig1"]),
+    )
 
 
 class GP:
@@ -83,6 +226,9 @@ class GP:
     kernel: class: `TinyGp.kernel` object
         The tinygp kernel for the GP
 
+    mean: class: `TinyGp.mean` object
+        The tinygp mean for the GP
+
     maingp: class: `TinyGp.GaussianProcess` object
         The tinygp gaussian process made on the lightcurve
 
@@ -94,7 +240,9 @@ class GP:
         self.Model_param = Model_params
         self.kernel = get_kernel(self.Model_type[0], self.Model_param)
         self.mean = get_mean(self.Model_type[1], self.Model_param)
-        self.maingp = GaussianProcess(self.kernel, Lc.time, mean = self.mean, diag=Model_params["diag"])
+        self.maingp = GaussianProcess(
+            self.kernel, Lc.time, mean=self.mean, diag=Model_params["diag"]
+        )
 
     def get_logprob(self):
         """
@@ -121,7 +269,7 @@ class GP:
         plt.ylabel("Value")
         plt.title("Kernel Function")
 
-    def plot_originalgp(self, sample_no=1, seed = 0):
+    def plot_originalgp(self, sample_no=1, seed=0):
         """
         Plots samples obtained from the gaussian process for the kernel
 
@@ -132,7 +280,7 @@ class GP:
 
         """
         X_test = self.lc.time
-        _ , ax = plt.subplots(1, 1, figsize=(10, 3))
+        _, ax = plt.subplots(1, 1, figsize=(10, 3))
         y_samp = self.maingp.sample(jax.random.PRNGKey(seed), shape=(sample_no,))
         ax.plot(X_test, y_samp[0], "C0", lw=0.5, alpha=0.5, label="samples")
         ax.plot(X_test, y_samp[1:].T, "C0", lw=0.5, alpha=0.5)
@@ -140,7 +288,7 @@ class GP:
         ax.set_ylabel("counts")
         ax.legend(loc="best")
 
-    def plot_gp(self, sample_no=1, seed = 0):
+    def plot_gp(self, sample_no=1, seed=0):
         """
         Plots gaussian process, conditioned on the lightcurve
         Also, plots the lightcurve along with it
@@ -166,6 +314,7 @@ class GP:
         ax.set_ylabel("counts")
         ax.legend(loc="best")
 
+
 def get_prior(kernel_type, mean_type, **kwargs):
     """
     A prior generator function based on given values
@@ -179,44 +328,98 @@ def get_prior(kernel_type, mean_type, **kwargs):
     -------
     The Prior function.
     The arguments of the prior function are in the order of
-    Kernel arguments (RN arguments, QPO arguments), 
+    Kernel arguments (RN arguments, QPO arguments),
     Mean arguments
     Non Windowed arguments
 
     """
-    kwargs["T"] = kwargs["Times"][-1] - kwargs["Times"][0]    # Total time
-    kwargs["f"] = 1/(kwargs["Times"][1] - kwargs["Times"][0]) # Sampling frequency
+    kwargs["T"] = kwargs["Times"][-1] - kwargs["Times"][0]  # Total time
+    kwargs["f"] = 1 / (kwargs["Times"][1] - kwargs["Times"][0])  # Sampling frequency
     kwargs["min"] = jnp.min(kwargs["counts"])
     kwargs["max"] = jnp.max(kwargs["counts"])
     kwargs["span"] = kwargs["max"] - kwargs["min"]
 
     def RNprior_model():
-        arn = yield Prior(tfpd.Uniform(0.1*kwargs["span"], 2*kwargs["span"]), name='arn') 
-        crn = yield Prior(tfpd.Uniform(jnp.log(1/kwargs["T"]), jnp.log(kwargs["f"])), name='crn')
+        arn = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="arn")
+        crn = yield Prior(tfpd.Uniform(jnp.log(1 / kwargs["T"]), jnp.log(kwargs["f"])), name="crn")
 
-        A = yield Prior(tfpd.Uniform(0.1*kwargs["span"], 2*kwargs["span"]), name='A') 
-        t0 = yield Prior(tfpd.Uniform(kwargs["Times"][0]-0.1*kwargs["T"], kwargs["Times"][-1]+0.1*kwargs["T"]), name='t0')
-        sig = yield Prior(tfpd.Uniform(0.5*1/kwargs["f"], 2*kwargs["T"]), name='sig')
+        A = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="A")
+        t0 = yield Prior(
+            tfpd.Uniform(
+                kwargs["Times"][0] - 0.1 * kwargs["T"], kwargs["Times"][-1] + 0.1 * kwargs["T"]
+            ),
+            name="t0",
+        )
+        sig = yield Prior(tfpd.Uniform(0.5 * 1 / kwargs["f"], 2 * kwargs["T"]), name="sig")
         return arn, crn, A, t0, sig
-    
-    if (kernel_type == "RN") & ( (mean_type == "gaussian") | (mean_type == "exponential") ):
+
+    if (kernel_type == "RN") & ((mean_type == "gaussian") | (mean_type == "exponential")):
         return RNprior_model
 
     def QPOprior_model():
-        arn = yield Prior(tfpd.Uniform(0.1*kwargs["span"], 2*kwargs["span"]), name='arn') 
-        crn = yield Prior(tfpd.Uniform(jnp.log(1/kwargs["T"]), jnp.log(kwargs["f"])), name='crn')
-        aqpo = yield Prior(tfpd.Uniform(0.1*kwargs["span"], 2*kwargs["span"]), name='aqpo')
-        cqpo = yield Prior(tfpd.Uniform(1/10/kwargs["T"], jnp.log(kwargs["f"])), name='cqpo')
-        freq = yield Prior(tfpd.Uniform(2/kwargs["T"], kwargs["f"]/2 ), name='freq')
+        arn = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="arn")
+        crn = yield Prior(tfpd.Uniform(jnp.log(1 / kwargs["T"]), jnp.log(kwargs["f"])), name="crn")
+        aqpo = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="aqpo")
+        cqpo = yield Prior(tfpd.Uniform(1 / 10 / kwargs["T"], jnp.log(kwargs["f"])), name="cqpo")
+        freq = yield Prior(tfpd.Uniform(2 / kwargs["T"], kwargs["f"] / 2), name="freq")
 
-        A = yield Prior(tfpd.Uniform(0.1*kwargs["span"], 2*kwargs["span"]), name='A') 
-        t0 = yield Prior(tfpd.Uniform(kwargs["Times"][0]-0.1*kwargs["T"], kwargs["Times"][-1]+0.1*kwargs["T"]), name='t0')
-        sig = yield Prior(tfpd.Uniform(0.5*1/kwargs["f"], 2*kwargs["T"]), name='sig')
+        A = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="A")
+        t0 = yield Prior(
+            tfpd.Uniform(
+                kwargs["Times"][0] - 0.1 * kwargs["T"], kwargs["Times"][-1] + 0.1 * kwargs["T"]
+            ),
+            name="t0",
+        )
+        sig = yield Prior(tfpd.Uniform(0.5 * 1 / kwargs["f"], 2 * kwargs["T"]), name="sig")
 
         return arn, crn, aqpo, cqpo, freq, A, t0, sig
-    
-    if ( kernel_type == "QPO_plus_RN") & ( (mean_type == "gaussian") | (mean_type == "exponential") ):
+
+    if (kernel_type == "QPO_plus_RN") & ((mean_type == "gaussian") | (mean_type == "exponential")):
         return QPOprior_model
+
+    def skew_RNprior_model():
+        arn = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="arn")
+        crn = yield Prior(tfpd.Uniform(jnp.log(1 / kwargs["T"]), jnp.log(kwargs["f"])), name="crn")
+
+        A = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="A")
+        t0 = yield Prior(
+            tfpd.Uniform(
+                kwargs["Times"][0] - 0.1 * kwargs["T"], kwargs["Times"][-1] + 0.1 * kwargs["T"]
+            ),
+            name="t0",
+        )
+        sig1 = yield Prior(tfpd.Uniform(0.5 * 1 / kwargs["f"], 2 * kwargs["T"]), name="sig1")
+        sig2 = yield Prior(tfpd.Uniform(0.5 * 1 / kwargs["f"], 2 * kwargs["T"]), name="sig2")
+
+        return arn, crn, A, t0, sig1, sig2
+
+    if (kernel_type == "RN") & ((mean_type == "skew_gaussian") | (mean_type == "skew_exponential")):
+        return skew_RNprior_model
+
+    def skew_QPOprior_model():
+        arn = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="arn")
+        crn = yield Prior(tfpd.Uniform(jnp.log(1 / kwargs["T"]), jnp.log(kwargs["f"])), name="crn")
+        aqpo = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="aqpo")
+        cqpo = yield Prior(tfpd.Uniform(1 / 10 / kwargs["T"], jnp.log(kwargs["f"])), name="cqpo")
+        freq = yield Prior(tfpd.Uniform(2 / kwargs["T"], kwargs["f"] / 2), name="freq")
+
+        A = yield Prior(tfpd.Uniform(0.1 * kwargs["span"], 2 * kwargs["span"]), name="A")
+        t0 = yield Prior(
+            tfpd.Uniform(
+                kwargs["Times"][0] - 0.1 * kwargs["T"], kwargs["Times"][-1] + 0.1 * kwargs["T"]
+            ),
+            name="t0",
+        )
+        sig1 = yield Prior(tfpd.Uniform(0.5 * 1 / kwargs["f"], 2 * kwargs["T"]), name="sig1")
+        sig2 = yield Prior(tfpd.Uniform(0.5 * 1 / kwargs["f"], 2 * kwargs["T"]), name="sig2")
+
+        return arn, crn, aqpo, cqpo, freq, A, t0, sig1, sig2
+
+    if (kernel_type == "QPO_plus_RN") & (
+        (mean_type == "skew_gaussian") | (mean_type == "skew_exponential")
+    ):
+        return skew_QPOprior_model
+
 
 def get_likelihood(kernel_type, mean_type, **kwargs):
     """
@@ -225,50 +428,118 @@ def get_likelihood(kernel_type, mean_type, **kwargs):
 
     @jit
     def RNlog_likelihood(arn, crn, A, t0, sig):
-        rnlikelihood_params = {"arn": arn, "crn": crn,
-                            "aqpo": 0.0, "cqpo": 0.0, "freq": 0.0, }
-        
-        mean_params = { "A": A, "t0": t0, "sig": sig, }
-        
-        kernel = get_kernel(kernel_type = "RN", kernel_params= rnlikelihood_params)
+        rnlikelihood_params = {
+            "arn": arn,
+            "crn": crn,
+            "aqpo": 0.0,
+            "cqpo": 0.0,
+            "freq": 0.0,
+        }
 
-        # This could be causing problems
-        mean = get_mean(mean_type = mean_type, mean_params = mean_params)
-                
-        gp = GaussianProcess(kernel, kwargs["Times"], mean = mean)
+        mean_params = {
+            "A": A,
+            "t0": t0,
+            "sig": sig,
+        }
+
+        kernel = get_kernel(kernel_type="RN", kernel_params=rnlikelihood_params)
+
+        mean = get_mean(mean_type=mean_type, mean_params=mean_params)
+
+        gp = GaussianProcess(kernel, kwargs["Times"], mean=mean)
         return gp.log_probability(kwargs["counts"])
-    
-    if (kernel_type == "RN") & ( (mean_type == "gaussian") | (mean_type == "exponential") ):
+
+    if (kernel_type == "RN") & ((mean_type == "gaussian") | (mean_type == "exponential")):
         return RNlog_likelihood
 
     @jit
-    def QPOlog_likelihood(arn, crn, aqpo, cqpo, freq,  A, t0, sig):
-        qpolikelihood_params = {"arn": arn, "crn": crn,
-                                "aqpo": aqpo, "cqpo": cqpo, "freq": freq, }
-                
-        mean_params = {"A": A, "t0": t0, "sig": sig,}
+    def QPOlog_likelihood(arn, crn, aqpo, cqpo, freq, A, t0, sig):
+        qpolikelihood_params = {
+            "arn": arn,
+            "crn": crn,
+            "aqpo": aqpo,
+            "cqpo": cqpo,
+            "freq": freq,
+        }
 
-        kernel = get_kernel(kernel_type = "RN", kernel_params= qpolikelihood_params)
+        mean_params = {
+            "A": A,
+            "t0": t0,
+            "sig": sig,
+        }
 
-        mean = get_mean(mean_type = mean_type, mean_params = mean_params)
+        kernel = get_kernel(kernel_type="QPO_plus_RN", kernel_params=qpolikelihood_params)
+        mean = get_mean(mean_type=mean_type, mean_params=mean_params)
 
-        # print("hi")
-        gp = GaussianProcess(kernel, kwargs["Times"], mean = mean)
-        # print(gp)
-        # print(gp.kernel)
-        # print(len(gp.X))
-        # print(type(gp.X))
-        # print("log_likelihood", gp.log_probability(kwargs["counts"]))
+        gp = GaussianProcess(kernel, kwargs["Times"], mean=mean)
         return gp.log_probability(kwargs["counts"])
-    
-    if ( kernel_type == "QPO_plus_RN") & ( (mean_type == "gaussian") | (mean_type == "exponential") ):
+
+    if (kernel_type == "QPO_plus_RN") & ((mean_type == "gaussian") | (mean_type == "exponential")):
         return QPOlog_likelihood
-    
+
+    @jit
+    def skew_RNlog_likelihood(arn, crn, A, t0, sig1, sig2):
+        rnlikelihood_params = {
+            "arn": arn,
+            "crn": crn,
+            "aqpo": 0.0,
+            "cqpo": 0.0,
+            "freq": 0.0,
+        }
+
+        mean_params = {
+            "A": A,
+            "t0": t0,
+            "sig1": sig1,
+            "sig2": sig2,
+        }
+
+        kernel = get_kernel(kernel_type="RN", kernel_params=rnlikelihood_params)
+
+        # This could be causing problems
+        mean = get_mean(mean_type=mean_type, mean_params=mean_params)
+
+        gp = GaussianProcess(kernel, kwargs["Times"], mean=mean)
+        return gp.log_probability(kwargs["counts"])
+
+    if (kernel_type == "RN") & ((mean_type == "gaussian") | (mean_type == "exponential")):
+        return skew_RNlog_likelihood
+
+    @jit
+    def skewQPOlog_likelihood(arn, crn, aqpo, cqpo, freq, A, t0, sig1, sig2):
+        qpolikelihood_params = {
+            "arn": arn,
+            "crn": crn,
+            "aqpo": aqpo,
+            "cqpo": cqpo,
+            "freq": freq,
+        }
+
+        mean_params = {
+            "A": A,
+            "t0": t0,
+            "sig1": sig1,
+            "sig2": sig2,
+        }
+
+        kernel = get_kernel(kernel_type="QPO_plus_RN", kernel_params=qpolikelihood_params)
+
+        mean = get_mean(mean_type=mean_type, mean_params=mean_params)
+
+        gp = GaussianProcess(kernel, kwargs["Times"], mean=mean)
+        return gp.log_probability(kwargs["counts"])
+
+    if (kernel_type == "QPO_plus_RN") & (
+        (mean_type == "skew_gaussian") | (mean_type == "skew_exponential")
+    ):
+        return skewQPOlog_likelihood
+
+
 class GPResult:
     """
     Makes a GP regressor for a given GP class and a prior over it.
     Provides the sampled hyperparameters and tabulates their charachtersistics
-    Using numpyro for bayesian inferencing and Hyperparameter sampling.
+    Using jaxns for nested sampling and evidence analysis
 
     Parameters
     ----------
@@ -291,16 +562,6 @@ class GPResult:
     lc: Stingray.Lightcurve object
         The lightcurve on which the gaussian process regression, is to be done
 
-    self.mcmc: `numpyro.mcmc`
-        Numpyro MCMC sampler for the evaluated Gaussian Process
-
-    self.samples: dict
-        Hyperparamter samples obtained from the bayesian sampling
-
-    self.parameters: dict
-        Dictionary containing the optimal hyperparameters obtained from the
-        mean of the calculated samples
-
     """
 
     def __init__(self, GP: GP, prior_type: tuple, prior_parameters=None) -> None:
@@ -319,42 +580,40 @@ class GPResult:
         self.prior_model = get_prior(self.prior_type[0], self.prior_type[1], **dict)
         self.likelihood = get_likelihood(self.prior_type[0], self.prior_type[1], **dict)
 
-        print(self.prior_model)
-        for obs in self.prior_model():
-            print(obs)
-        print(self.likelihood)
+        NSmodel = Model(prior_model=self.prior_model, log_likelihood=self.likelihood)
 
-        NSmodel = Model(prior_model= self.prior_model, log_likelihood=self.likelihood)
+        NSmodel.sanity_check(random.PRNGKey(10), S=100)
 
-        NSmodel.sanity_check(random.PRNGKey(10), S = 100)
-
-        self.Exact_ns = ExactNestedSampler(NSmodel, num_live_points= 500, max_samples= 1e4)
-        Termination_reason, State = self.Exact_ns(random.PRNGKey(42), term_cond=TerminationCondition(live_evidence_frac=1e-4))
+        self.Exact_ns = ExactNestedSampler(NSmodel, num_live_points=500, max_samples=1e4)
+        Termination_reason, State = self.Exact_ns(
+            random.PRNGKey(42), term_cond=TerminationCondition(live_evidence_frac=1e-4)
+        )
         self.Results = self.Exact_ns.to_results(State, Termination_reason)
+        print("Simulation Complete")
 
     def print_summary(self):
         """
         Prints a summary table for the model parameters
         """
         self.Exact_ns.summary(self.Results)
-    
+
     def plot_diagnostics(self):
         """
         Plots the diagnostic plots for the sampling process
         """
         self.Exact_ns.plot_diagnostics(self.Results)
 
-    def corner_plot(self):
+    def plot_cornerplot(self):
         """
         Plots the corner plot for the sampled hyperparameters
         """
-        self.Exact_ns.plot_corner(self.Results)
+        self.Exact_ns.plot_cornerplot(self.Results)
 
     def get_parameters(self):
         """
         Returns the optimal parameters for the model based on the NUTS sampling
         """
-        
+
         pass
 
     def plot_posterior(self, X_test):
@@ -369,5 +628,5 @@ class GPResult:
             Can be made default with lc.times as default
 
         """
-        
+
         pass
