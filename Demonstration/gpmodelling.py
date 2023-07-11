@@ -350,95 +350,6 @@ def get_likelihood(params_list, kernel_type, mean_type, **kwargs):
 
     return likelihood_model
 
-class GPResult:
-
-    def __init__(self, Lc: Lightcurve) -> None:
-        self.lc = Lc
-        self.time = Lc.time
-        self.counts = Lc.counts
-        self.Result = None
-
-    # def fit(self, kernel=None, mean=None, **kwargs):
-    #     self.kernel = kernel
-    #     self.mean = mean
-    #     self.maingp = GaussianProcess(
-    #         self.kernel, self.time, mean_value=self.mean(self.time), diag=kwargs["diag"]
-    #     )
-
-    def sample(self, prior_model=None, likelihood_model=None, **kwargs):
-        """
-        Makes a Jaxns nested sampler over the Gaussian Process, given the
-        prior and likelihood model
-
-        Parameters
-        ----------
-        prior_model: jaxns.prior.PriorModelType object
-            A prior generator object
-
-        likelihood_model: jaxns.types.LikelihoodType object
-            A likelihood fucntion which takes in the arguments of the prior
-            model and returns the loglikelihood of the model
-
-        Returns
-        ----------
-        Results: jaxns.results.NestedSamplerResults object
-            The results of the nested sampling process
-
-        """
-
-        self.prior_model = prior_model
-        self.likelihood_model = likelihood_model
-
-        NSmodel = Model(prior_model=self.prior_model, log_likelihood=self.likelihood_model)
-        NSmodel.sanity_check(random.PRNGKey(10), S=100)
-
-        self.Exact_ns = ExactNestedSampler(NSmodel, num_live_points=500, max_samples=1e4)
-        Termination_reason, State = self.Exact_ns(
-            random.PRNGKey(42), term_cond=TerminationCondition(live_evidence_frac=1e-4)
-        )
-        self.Results = self.Exact_ns.to_results(State, Termination_reason)
-        print("Simulation Complete")
-
-    def print_summary(self):
-        """
-        Prints a summary table for the model parameters
-        """
-        self.Exact_ns.summary(self.Results)
-
-    def plot_diagnostics(self):
-        """
-        Plots the diagnostic plots for the sampling process
-        """
-        self.Exact_ns.plot_diagnostics(self.Results)
-
-    def plot_cornerplot(self):
-        """
-        Plots the corner plot for the sampled hyperparameters
-        """
-        self.Exact_ns.plot_cornerplot(self.Results)
-
-    def get_parameters(self):
-        """
-        Returns the optimal parameters for the model based on the NUTS sampling
-        """
-
-        pass
-
-    def plot_posterior(self, X_test):
-        """
-        Plots posterior gaussian process, conditioned on the lightcurve
-        Also, plots the lightcurve along with it
-
-        Parameters
-        ----------
-        X_test: jnp.array
-            Array over which the Gaussian process values are to be obtained
-            Can be made default with lc.times as default
-
-        """
-
-        pass
-
 
 class GP:
     """
@@ -625,6 +536,25 @@ class GP:
         pass
 
 class GPResult:
+    """
+    Makes a GPResult object which takes in a Stingray.Lightcurve and samples parameters of a model
+    (Gaussian Process) based on the given prior and log_likelihood function.
+
+    Parameters
+    ----------
+    lc: Stingray.Lightcurve object
+        The lightcurve on which the bayesian inference is to be done
+
+    Other Parameters
+    ----------------
+    time : class: np.array
+        The array containing the times of the lightcurve
+
+    counts : class: np.array
+        The array containing the photon counts of the lightcurve
+
+    """
+
     def __init__(self, Lc: Lightcurve) -> None:
         self.lc = Lc
         self.time = Lc.time
@@ -632,6 +562,25 @@ class GPResult:
         self.Result = None
 
     def sample(self, prior_model=None, likelihood_model=None, **kwargs):
+        """
+        Makes a Jaxns nested sampler over the Gaussian Process, given the
+        prior and likelihood model
+
+        Parameters
+        ----------
+        prior_model: jaxns.prior.PriorModelType object
+            A prior generator object
+
+        likelihood_model: jaxns.types.LikelihoodType object
+            A likelihood fucntion which takes in the arguments of the prior
+            model and returns the loglikelihood of the model
+
+        Returns
+        ----------
+        Results: jaxns.results.NestedSamplerResults object
+            The results of the nested sampling process
+
+        """
 
         self.prior_model = prior_model
         self.likelihood_model = likelihood_model
@@ -651,7 +600,7 @@ class GPResult:
         Returns the log evidence of the model
         """
         return self.Results.log_Z_mean
-    
+
     def print_summary(self):
         """
         Prints a summary table for the model parameters
@@ -682,7 +631,7 @@ class GPResult:
         """
         max_post_idx = jnp.argmax(self.Results.log_posterior_density)
         map_points = jax.tree_map(lambda x: x[max_post_idx], self.Results.samples)
-        
+
         return map_points
 
     def get_max_likelihood_parameters(self):
@@ -693,25 +642,27 @@ class GPResult:
         max_like_points = jax.tree_map(lambda x: x[max_like_idx], self.Results.samples)
 
         return max_like_points
-    
-    def posterior_plot(self, name : str, n = 0):
+
+    def posterior_plot(self, name: str, n=0):
         """
         Plots the posterior histogram for the given parameter
         """
         nsamples = self.Results.total_num_samples
         samples = self.Results.samples[name].reshape((nsamples, -1))[:, n]
-        plt.hist(samples, bins = "auto", density = True, alpha = 1.0, label = name, fc='None', edgecolor='black')
+        plt.hist(
+            samples, bins="auto", density=True, alpha=1.0, label=name, fc="None", edgecolor="black"
+        )
         mean1 = jnp.mean(self.Results.samples[name])
         std1 = jnp.std(self.Results.samples[name])
-        plt.axvline(mean1, color = "red", linestyle='dashed', label = "mean")
-        plt.axvline(mean1 + std1, color = "green", linestyle='dotted')
-        plt.axvline(mean1 - std1, linestyle='dotted', color = "green")
+        plt.axvline(mean1, color="red", linestyle="dashed", label="mean")
+        plt.axvline(mean1 + std1, color="green", linestyle="dotted")
+        plt.axvline(mean1 - std1, linestyle="dotted", color="green")
         plt.legend()
         plt.plot()
 
         pass
 
-    def weighted_posterior_plot(self, name : str, n = 0 , rkey = random.PRNGKey(1234)):
+    def weighted_posterior_plot(self, name: str, n=0, rkey=random.PRNGKey(1234)):
         """
         Returns the weighted posterior histogram for the given parameter
         """
@@ -719,23 +670,33 @@ class GPResult:
         log_p = self.Results.log_dp_mean
         samples = self.Results.samples[name].reshape((nsamples, -1))[:, n]
 
-        weights = jnp.where(jnp.isfinite(samples), jnp.exp(log_p), 0.)
+        weights = jnp.where(jnp.isfinite(samples), jnp.exp(log_p), 0.0)
         log_weights = jnp.where(jnp.isfinite(samples), log_p, -jnp.inf)
-        samples_resampled = resample(rkey, samples, log_weights, S=max(10, int(self.Results.ESS)), replace=True)
+        samples_resampled = resample(
+            rkey, samples, log_weights, S=max(10, int(self.Results.ESS)), replace=True
+        )
 
         nbins = max(10, int(jnp.sqrt(self.Results.ESS)) + 1)
         binsx = jnp.linspace(*jnp.percentile(samples_resampled, jnp.asarray([0, 100])), 2 * nbins)
 
-        plt.hist(np.asarray(samples_resampled), bins = binsx, density = True, alpha = 1.0, label = name, fc='None', edgecolor='black')
+        plt.hist(
+            np.asarray(samples_resampled),
+            bins=binsx,
+            density=True,
+            alpha=1.0,
+            label=name,
+            fc="None",
+            edgecolor="black",
+        )
         sample_mean = jnp.average(samples, weights=weights)
         sample_std = jnp.sqrt(jnp.average((samples - sample_mean) ** 2, weights=weights))
-        plt.axvline(sample_mean, color = "red", linestyle='dashed', label = "mean")
-        plt.axvline(sample_mean + sample_std, color = "green", linestyle='dotted')
-        plt.axvline(sample_mean - sample_std, linestyle='dotted', color = "green")
+        plt.axvline(sample_mean, color="red", linestyle="dashed", label="mean")
+        plt.axvline(sample_mean + sample_std, color="green", linestyle="dotted")
+        plt.axvline(sample_mean - sample_std, linestyle="dotted", color="green")
         plt.legend()
         plt.plot()
 
-    def corner_plot(self, param1 : str, param2 : str, n1 = 0, n2 = 0, rkey = random.PRNGKey(1234)):
+    def corner_plot(self, param1: str, param2: str, n1=0, n2=0, rkey=random.PRNGKey(1234)):
         """
         Plots the corner plot for the given parameters
         """
@@ -747,9 +708,20 @@ class GPResult:
         log_weights = jnp.where(jnp.isfinite(samples2), log_p, -jnp.inf)
         nbins = max(10, int(jnp.sqrt(self.Results.ESS)) + 1)
 
-        samples_resampled = resample(rkey, jnp.stack([samples1, samples2], axis=-1), log_weights,
-                                S=max(10, int(self.Results.ESS)), replace=True)
-        plt.hist2d(samples_resampled[:, 1], samples_resampled[:, 0], bins=(nbins, nbins), density=True, cmap ="GnBu")
+        samples_resampled = resample(
+            rkey,
+            jnp.stack([samples1, samples2], axis=-1),
+            log_weights,
+            S=max(10, int(self.Results.ESS)),
+            replace=True,
+        )
+        plt.hist2d(
+            samples_resampled[:, 1],
+            samples_resampled[:, 0],
+            bins=(nbins, nbins),
+            density=True,
+            cmap="GnBu",
+        )
         plt.plot()
 
         pass
