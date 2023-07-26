@@ -1,35 +1,63 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import jax
+import pytest
+# import numpy as np
+# import matplotlib.pyplot as plt
+# import functools
+# from stingray import Lightcurve
+
+try:
+    import jax
+except ImportError:
+    pytest.skip(allow_module_level=True)
+
+try:
+    import jax
+    import jax.numpy as jnp
+    from jax import jit, random
+    jax.config.update("jax_enable_x64", True)
+except ImportError:
+    raise ImportError("Jax not installed")
+
+# try:
+#     import jax
+# except ImportError:
+#     raise ImportError("Jax not installed")
+
 import jax.numpy as jnp
-import functools
-import tensorflow_probability.substrates.jax as tfp
-
-from jax import jit, random, vmap
-
-from tinygp import GaussianProcess, kernels
-from stingray import Lightcurve
-
-from jaxns import ExactNestedSampler
-from jaxns import TerminationCondition
-
-# from jaxns import analytic_log_evidence
-from jaxns import Prior, Model
-from jaxns.utils import resample
-from jax import random
+from jax import jit, random
 
 jax.config.update("jax_enable_x64", True)
 
-tfpd = tfp.distributions
-tfpb = tfp.bijectors
+try:
+    from tinygp import GaussianProcess, kernels
 
-__all__ = ["GP"]
+    can_make_gp = True
+except ImportError:
+    can_make_gp = False
+
+try:
+    from jaxns import ExactNestedSampler, TerminationCondition, Prior, Model
+    from jaxns.utils import resample
+
+    can_sample = True
+except ImportError:
+    can_sample = False
+try:
+    import tensorflow_probability.substrates.jax as tfp
+
+    tfpd = tfp.distributions
+    tfpb = tfp.bijectors
+    tfp_available = True
+except ImportError:
+    tfp_available = False
+
+
+__all__ = ["GPResult"]
 
 
 def get_kernel(kernel_type, kernel_params):
     """
     Function for producing the kernel for the Gaussian Process.
-    Returns the selected Tinygp kernel
+    Returns the selected Tinygp kernel for the given parameters.
 
     Parameters
     ----------
@@ -42,6 +70,9 @@ def get_kernel(kernel_type, kernel_params):
         Should contain the parameters for the selected kernel
 
     """
+    if not can_make_gp:
+        raise ImportError("Tinygp is required to make kernels")
+
     if kernel_type == "QPO_plus_RN":
         kernel = kernels.quasisep.Exp(
             scale=1 / kernel_params["crn"], sigma=(kernel_params["arn"]) ** 0.5
@@ -258,14 +289,38 @@ def _fred(t, mean_params):
     )
 
 
-def get_kernel_params(kernel_type):
+def _get_kernel_params(kernel_type):
+    """
+    Generates a list of the parameters for the kernel for the GP model based on the kernel type.
+
+    Parameters
+    ----------
+    kernel_type: string
+        The type of kernel to be used for the Gaussian Process model
+
+    Returns
+    -------
+        A list of the parameters for the kernel for the GP model
+    """
     if kernel_type == "RN":
         return ["arn", "crn"]
     elif kernel_type == "QPO_plus_RN":
         return ["arn", "crn", "aqpo", "cqpo", "freq"]
 
 
-def get_mean_params(mean_type):
+def _get_mean_params(mean_type):
+    """
+    Generates a list of the parameters for the mean for the GP model based on the mean type.
+
+    Parameters
+    ----------
+    mean_type: string
+        The type of mean to be used for the Gaussian Process model
+
+    Returns
+    -------
+        A list of the parameters for the mean for the GP model
+    """
     if (mean_type == "gaussian") or (mean_type == "exponential"):
         return ["A", "t0", "sig"]
     elif mean_type == "constant":
@@ -277,15 +332,39 @@ def get_mean_params(mean_type):
 
 
 def get_gp_params(kernel_type, mean_type):
-    kernel_params = get_kernel_params(kernel_type)
-    mean_params = get_mean_params(mean_type)
+    """
+    Generates a list of the parameters for the GP model based on the kernel and mean type.
+    To be used to set the order of the parameters for `get_prior` and `get_likelihood` functions.
+
+    Parameters
+    ----------
+    kernel_type: string
+        The type of kernel to be used for the Gaussian Process model
+
+    mean_type: string
+        The type of mean to be used for the Gaussian Process model
+
+    Returns
+    -------
+        A list of the parameters for the GP model
+
+    Examples
+    --------
+    >>> get_gp_params("QPO_plus_RN", "gaussian")
+    ['arn', 'crn', 'aqpo', 'cqpo', 'freq', 'A', 't0', 'sig']
+    """
+    kernel_params = _get_kernel_params(kernel_type)
+    mean_params = _get_mean_params(mean_type)
     kernel_params.extend(mean_params)
     return kernel_params
 
 
 def get_prior(params_list, prior_dict):
     """
-    A prior generator function based on given values
+    A prior generator function based on given values.
+    Makes a jaxns specific prior function based on the given prior dictionary.
+    Jaxns requires the parameters of the prior function and log_likelihood function to
+    be in the same order. This order is made according to the params_list.
 
     Parameters
     ----------
@@ -294,16 +373,42 @@ def get_prior(params_list, prior_dict):
 
     prior_dict:
         A dictionary of the priors of parameters to be used.
+        These parameters should be from tensorflow_probability distributions / Priors from jaxns
+        or special priors from jaxns.
+        **Note**: If jaxns priors are used, then the name given to them should be the same as
+        the corresponding name in the params_list.
 
     Returns
     -------
-    The Prior function.
+    The Prior generator function.
     The arguments of the prior function are in the order of
-    Kernel arguments (RN arguments, QPO arguments),
-    Mean arguments
-    Non Windowed arguments
+        Kernel arguments (RN arguments, QPO arguments),
+        Mean arguments
+        Miscellaneous arguments
+
+    Examples
+    --------
+    A prior function for a Red Noise kernel and a Gaussian mean function
+    Obain the parameters list
+    >>> params_list = get_gp_params("RN", "gaussian")
+
+    Make a prior dictionary using tensorflow_probability distributions
+    >>> prior_dict = {
+    ...    "A": tfpd.Uniform(low = 1e-1, high = 2e+2),
+    ...    "t0": tfpd.Uniform(low = 0.0 - 0.1, high = 1 + 0.1),
+    ...    "sig": tfpd.Uniform(low = 0.5 * 1 / 20, high = 2 ),
+    ...    "arn": tfpd.Uniform(low = 0.1 , high = 2 ),
+    ...    "crn": tfpd.Uniform(low = jnp.log(1 /5), high = jnp.log(20)),
+    ... }
+
+    >>> prior_model = get_prior(params_list, prior_dict)
 
     """
+    if not can_sample:
+        raise ImportError("Jaxns not installed. Cannot make jaxns specific prior.")
+
+    if not tfp_available:
+        raise ImportError("Tensorflow probability required to make priors.")
 
     def prior_model():
         prior_list = []
@@ -320,7 +425,11 @@ def get_prior(params_list, prior_dict):
 
 def get_likelihood(params_list, kernel_type, mean_type, **kwargs):
     """
-    A likelihood generator function based on given values
+    A log likelihood generator function based on given values.
+    Makes a jaxns specific log likelihood function which takes in the
+    parameters in the order of the parameters list, and calculates the
+    log likelihood of the data given the parameters, and the model
+    (kernel, mean) of the GP model.
 
     Parameters
     ----------
@@ -336,7 +445,22 @@ def get_likelihood(params_list, kernel_type, mean_type, **kwargs):
     mean_type:
         The type of mean to be used in the model.
 
+    **kwargs:
+        The keyword arguments to be used in the log likelihood function.
+        **Note**: The keyword arguments Times and counts are necessary for
+        calculating the log likelihood.
+        Times: np.array or jnp.array
+            The time array of the lightcurve
+        counts: np.array or jnp.array
+            The photon counts array of the lightcurve
+
+    Returns
+    -------
+    The jaxns specific log likelihood function.
+
     """
+    if not can_make_gp:
+        raise ImportError("Tinygp is required to make the GP model.")
 
     @jit
     def likelihood_model(*args):
@@ -350,190 +474,6 @@ def get_likelihood(params_list, kernel_type, mean_type, **kwargs):
 
     return likelihood_model
 
-
-class GP:
-    """
-    Makes a GP object which takes in a Stingray.Lightcurve and fits a Gaussian
-    Process on the lightcurve data, for the given kernel.
-
-    Parameters
-    ----------
-    lc: Stingray.Lightcurve object
-        The lightcurve on which the gaussian process, is to be fitted
-
-    Model_type: string tuple
-        Has two strings with the first being the name of the kernel type
-        and the secound being the mean type
-
-    Model_parameter: dict, default = None
-        Dictionary conatining the parameters for the mean and kernel
-        The keys should be accourding to the selected kernel and mean
-        coressponding to the Model_type
-        By default, it takes a value None, and the kernel and mean are
-        then bulit using the pre-set parameters.
-
-    Other Parameters
-    ----------------
-    kernel: class: `TinyGp.kernel` object
-        The tinygp kernel for the GP
-
-    mean: class: `TinyGp.mean` object
-        The tinygp mean for the GP
-
-    maingp: class: `TinyGp.GaussianProcess` object
-        The tinygp gaussian process made on the lightcurve
-
-    """
-
-    def __init__(self, Lc: Lightcurve) -> None:
-        self.lc = Lc
-        self.time = Lc.time
-        self.counts = Lc.counts
-
-    def fit(self, kernel=None, mean=None, **kwargs):
-        self.kernel = kernel
-        self.mean = mean
-        self.maingp = GaussianProcess(
-            self.kernel, self.time, mean_value=self.mean(self.time), diag=kwargs["diag"]
-        )
-
-    def get_logprob(self):
-        """
-        Returns the logprobability of the lightcurves counts for the
-        given kernel for the Gaussian Process
-        """
-        cond = self.maingp.condition(self.lc.counts)
-        return cond.log_probability
-
-    def plot_kernel(self):
-        """
-        Plots the kernel of the Gaussian Process
-        """
-        X = self.lc.time
-        Y = self.kernel(X, np.array([0.0]))
-        plt.plot(X, Y)
-        plt.xlabel("distance")
-        plt.ylabel("Value")
-        plt.title("Kernel Function")
-
-    def plot_originalgp(self, sample_no=1, seed=0):
-        """
-        Plots samples obtained from the gaussian process for the kernel
-
-        Parameters
-        ----------
-        sample_no: int , default = 1
-            Number of GP samples to be taken
-
-        """
-        X_test = self.lc.time
-        _, ax = plt.subplots(1, 1, figsize=(10, 3))
-        y_samp = self.maingp.sample(jax.random.PRNGKey(seed), shape=(sample_no,))
-        ax.plot(X_test, y_samp[0], "C0", lw=0.5, alpha=0.5, label="samples")
-        ax.plot(X_test, y_samp[1:].T, "C0", lw=0.5, alpha=0.5)
-        ax.set_xlabel("time")
-        ax.set_ylabel("counts")
-        ax.legend(loc="best")
-
-    def plot_gp(self, sample_no=1, seed=0):
-        """
-        Plots gaussian process, conditioned on the lightcurve
-        Also, plots the lightcurve along with it
-
-        Parameters
-        ----------
-        sample_no: int , default = 1
-            Number of GP samples to be taken
-
-        """
-        X_test = self.lc.time
-
-        _, ax = plt.subplots(1, 1, figsize=(10, 3))
-        _, cond_gp = self.maingp.condition(self.lc.counts, X_test)
-        mu = cond_gp.mean
-        # std = np.sqrt(cond_gp.variance)
-
-        ax.plot(self.lc.time, self.lc.counts, lw=2, color="blue", label="Lightcurve")
-        ax.plot(X_test, mu, "C1", label="Gaussian Process")
-        y_samp = cond_gp.sample(jax.random.PRNGKey(seed), shape=(sample_no,))
-        ax.plot(X_test, y_samp[0], "C0", lw=0.5, alpha=0.5)
-        ax.set_xlabel("time")
-        ax.set_ylabel("counts")
-        ax.legend(loc="best")
-
-    def sample(self, prior_model=None, likelihood_model=None, **kwargs):
-        """
-        Makes a Jaxns nested sampler over the Gaussian Process, given the
-        prior and likelihood model
-
-        Parameters
-        ----------
-        prior_model: jaxns.prior.PriorModelType object
-            A prior generator object
-
-        likelihood_model: jaxns.types.LikelihoodType object
-            A likelihood fucntion which takes in the arguments of the prior
-            model and returns the loglikelihood of the model
-
-        Returns
-        ----------
-        Results: jaxns.results.NestedSamplerResults object
-            The results of the nested sampling process
-
-        """
-
-        self.prior_model = prior_model
-        self.likelihood_model = likelihood_model
-
-        NSmodel = Model(prior_model=self.prior_model, log_likelihood=self.likelihood_model)
-        NSmodel.sanity_check(random.PRNGKey(10), S=100)
-
-        self.Exact_ns = ExactNestedSampler(NSmodel, num_live_points=500, max_samples=1e4)
-        Termination_reason, State = self.Exact_ns(
-            random.PRNGKey(42), term_cond=TerminationCondition(live_evidence_frac=1e-4)
-        )
-        self.Results = self.Exact_ns.to_results(State, Termination_reason)
-        print("Simulation Complete")
-
-    def print_summary(self):
-        """
-        Prints a summary table for the model parameters
-        """
-        self.Exact_ns.summary(self.Results)
-
-    def plot_diagnostics(self):
-        """
-        Plots the diagnostic plots for the sampling process
-        """
-        self.Exact_ns.plot_diagnostics(self.Results)
-
-    def plot_cornerplot(self):
-        """
-        Plots the corner plot for the sampled hyperparameters
-        """
-        self.Exact_ns.plot_cornerplot(self.Results)
-
-    def get_parameters(self):
-        """
-        Returns the optimal parameters for the model based on the NUTS sampling
-        """
-
-        pass
-
-    def plot_posterior(self, X_test):
-        """
-        Plots posterior gaussian process, conditioned on the lightcurve
-        Also, plots the lightcurve along with it
-
-        Parameters
-        ----------
-        X_test: jnp.array
-            Array over which the Gaussian process values are to be obtained
-            Can be made default with lc.times as default
-
-        """
-
-        pass
 
 class GPResult:
     """
@@ -581,6 +521,8 @@ class GPResult:
             The results of the nested sampling process
 
         """
+        if not can_sample:
+            raise ImportError("Jaxns not installed! Can't sample!")
 
         self.prior_model = prior_model
         self.likelihood_model = likelihood_model
@@ -643,9 +585,37 @@ class GPResult:
 
         return max_like_points
 
-    def posterior_plot(self, name: str, n=0):
+    def posterior_plot(self, name: str, n=0, axis=None, save=False, filename=None):
         """
         Plots the posterior histogram for the given parameter
+
+        Parameters
+        ----------
+        name : str
+            Name of the parameter to be plotted
+            Should be from the names of the parameter list used or from the names of parameters
+            used in the prior_function
+        
+        n : int, default 0
+            The index of the parameter to be plotted.
+            For multivariate parameters, the index of the specific parameter to be plotted.
+
+        axis : list, tuple, string, default ``None``
+            Parameter to set axis properties of ``matplotlib`` figure. For example
+            it can be a list like ``[xmin, xmax, ymin, ymax]`` or any other
+            acceptable argument for ``matplotlib.pyplot.axis()`` method.
+
+        save : bool, optionalm, default ``False``
+            If ``True``, save the figure with specified filename.
+
+        filename : str
+            File name and path of the image to save. Depends on the boolean ``save``.
+
+        Returns
+        -------
+        plt : ``matplotlib.pyplot`` object
+            Reference to plot, call ``show()`` to display it
+
         """
         nsamples = self.Results.total_num_samples
         samples = self.Results.samples[name].reshape((nsamples, -1))[:, n]
@@ -657,10 +627,21 @@ class GPResult:
         plt.axvline(mean1, color="red", linestyle="dashed", label="mean")
         plt.axvline(mean1 + std1, color="green", linestyle="dotted")
         plt.axvline(mean1 - std1, linestyle="dotted", color="green")
+        plt.title("Posterior Histogram of ",name)
+        plt.xlabel(name)
+        plt.ylabel("Probability Density")
         plt.legend()
-        plt.plot()
 
-        pass
+        if axis is not None:
+            plt.axis(axis)
+
+        if save:
+            if filename is None:
+                plt.savefig(str(name) + "_Posterior_plot.png")
+            else:
+                plt.savefig(filename)
+        return plt
+
 
     def weighted_posterior_plot(self, name: str, n=0, rkey=random.PRNGKey(1234)):
         """
@@ -723,5 +704,3 @@ class GPResult:
             cmap="GnBu",
         )
         plt.plot()
-
-        pass

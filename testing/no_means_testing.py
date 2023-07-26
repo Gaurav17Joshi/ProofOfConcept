@@ -17,7 +17,8 @@ tfpb = tfp.bijectors
 
 # Data -----------------------------------------------------------------------
 # Times = np.linspace(0,1,64)
-Times = jnp.linspace(0,1,64) # works well, using np.linpace requires us to use numpy.float64
+Times = jnp.linspace(0,1,64) # works well, using np.linpace requires us to use numpy.float64, 
+# either use jnp.linspace or enable jax.config before importing jaxns
 kernel = tinygp.kernels.quasisep.Exp(scale=1 / jnp.exp(1.0), sigma=(jnp.exp(1.5)) ** 0.5)
 
 # Remove mean in another file
