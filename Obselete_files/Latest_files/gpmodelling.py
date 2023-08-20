@@ -77,16 +77,6 @@ def get_kernel(kernel_type, kernel_params):
             scale=1 / kernel_params["crn"], sigma=(kernel_params["arn"]) ** 0.5
         )
         return kernel
-    elif kernel_type == "QPO":
-        kernel = kernels.quasisep.Celerite(
-            a=kernel_params["aqpo"],
-            b=0.0,
-            c=kernel_params["cqpo"],
-            d=2 * jnp.pi * kernel_params["freq"],
-        )
-        return kernel
-    else:
-        raise ValueError("Kernel type not implemented")
 
 
 def get_mean(mean_type, mean_params):
@@ -119,8 +109,6 @@ def get_mean(mean_type, mean_params):
         mean = functools.partial(_skew_exponential, mean_params=mean_params)
     elif mean_type == "fred":
         mean = functools.partial(_fred, mean_params=mean_params)
-    else:
-        raise ValueError("Mean type not implemented")
     return mean
 
 
@@ -301,20 +289,15 @@ def _get_kernel_params(kernel_type):
     ----------
     kernel_type: string
         The type of kernel to be used for the Gaussian Process model
-        The parameters in log scale have a prefix of "log_"
 
     Returns
     -------
         A list of the parameters for the kernel for the GP model
     """
     if kernel_type == "RN":
-        return ["log_arn", "log_crn"]
+        return ["arn", "crn"]
     elif kernel_type == "QPO_plus_RN":
-        return ["log_arn", "log_crn", "log_aqpo", "log_cqpo", "log_freq"]
-    elif kernel_type == "QPO":
-        return ["log_aqpo", "log_cqpo", "log_freq"]
-    else:
-        raise ValueError("Kernel type not implemented")
+        return ["arn", "crn", "aqpo", "cqpo", "freq"]
 
 
 def _get_mean_params(mean_type):
@@ -325,22 +308,19 @@ def _get_mean_params(mean_type):
     ----------
     mean_type: string
         The type of mean to be used for the Gaussian Process model
-        The parameters in log scale have a prefix of "log_"
 
     Returns
     -------
         A list of the parameters for the mean for the GP model
     """
     if (mean_type == "gaussian") or (mean_type == "exponential"):
-        return ["log_A", "t0", "log_sig"]
+        return ["A", "t0", "sig"]
     elif mean_type == "constant":
-        return ["log_A"]
+        return ["A"]
     elif (mean_type == "skew_gaussian") or (mean_type == "skew_exponential"):
-        return ["log_A", "t0", "log_sig1", "log_sig2"]
+        return ["A", "t0", "sig1", "sig2"]
     elif mean_type == "fred":
-        return ["log_A", "t0", "delta", "phi"]
-    else:
-        raise ValueError("Mean type not implemented")
+        return ["A", "t0", "delta", "phi"]
 
 
 def get_gp_params(kernel_type, mean_type):
@@ -363,7 +343,7 @@ def get_gp_params(kernel_type, mean_type):
     Examples
     --------
     get_gp_params("QPO_plus_RN", "gaussian")
-    ['log_arn', 'log_crn', 'log_aqpo', 'log_cqpo', 'log_freq', 'log_A', 't0', 'log_sig']
+    ['arn', 'crn', 'aqpo', 'cqpo', 'freq', 'A', 't0', 'sig']
     """
     kernel_params = _get_kernel_params(kernel_type)
     mean_params = _get_mean_params(mean_type)
@@ -389,7 +369,6 @@ def get_prior(params_list, prior_dict):
         or special priors from jaxns.
         **Note**: If jaxns priors are used, then the name given to them should be the same as
         the corresponding name in the params_list.
-        Also, if a parameter is to be used in the log scale, it should have a prefix of "log_"
 
     Returns
     -------
@@ -412,11 +391,11 @@ def get_prior(params_list, prior_dict):
 
     Make a prior dictionary using tensorflow_probability distributions
     prior_dict = {
-       "log_A": tfpd.Uniform(low = jnp.log(1e-1), high = jnp.log(2e+2)),
+       "A": tfpd.Uniform(low = 1e-1, high = 2e+2),
        "t0": tfpd.Uniform(low = 0.0 - 0.1, high = 1 + 0.1),
-       "log_sig": tfpd.Uniform(low = jnp.log(0.5 * 1 / 20), high = jnp.log(2) ),
-       "log_arn": tfpd.Uniform(low = jnp.log(0.1) , high = jnp.log(2) ),
-       "log_crn": tfpd.Uniform(low = jnp.log(1 /5), high = jnp.log(20)),
+       "sig": tfpd.Uniform(low = 0.5 * 1 / 20, high = 2 ),
+       "arn": tfpd.Uniform(low = 0.1 , high = 2 ),
+       "crn": tfpd.Uniform(low = jnp.log(1 /5), high = jnp.log(20)),
     }
 
     prior_model = get_prior(params_list, prior_dict)
@@ -450,8 +429,7 @@ def get_likelihood(params_list, kernel_type, mean_type, **kwargs):
     Makes a jaxns specific log likelihood function which takes in the
     parameters in the order of the parameters list, and calculates the
     log likelihood of the data given the parameters, and the model
-    (kernel, mean) of the GP model. **Note** Any parameters with a prefix
-    of "log_" are taken to be in the log scale.
+    (kernel, mean) of the GP model.
 
     Parameters
     ----------
@@ -491,10 +469,7 @@ def get_likelihood(params_list, kernel_type, mean_type, **kwargs):
     def likelihood_model(*args):
         dict = {}
         for i, params in enumerate(params_list):
-            if params[0:4] == "log_":
-                dict[params[4:]] = jnp.exp(args[i])
-            else:
-                dict[params] = args[i]
+            dict[params] = args[i]
         kernel = get_kernel(kernel_type=kernel_type, kernel_params=dict)
         mean = get_mean(mean_type=mean_type, mean_params=dict)
         gp = GaussianProcess(kernel, kwargs["Times"], mean_value=mean(kwargs["Times"]))
@@ -529,7 +504,7 @@ class GPResult:
         self.counts = Lc.counts
         self.Result = None
 
-    def sample(self, prior_model=None, likelihood_model=None, max_samples=1e4):
+    def sample(self, prior_model=None, likelihood_model=None, **kwargs):
         """
         Makes a Jaxns nested sampler over the Gaussian Process, given the
         prior and likelihood model
@@ -542,9 +517,6 @@ class GPResult:
         likelihood_model: jaxns.types.LikelihoodType object
             A likelihood fucntion which takes in the arguments of the prior
             model and returns the loglikelihood of the model
-
-        max_samples: int, default 1e4
-            The maximum number of samples to be taken by the nested sampler
 
         Returns
         ----------
@@ -564,7 +536,7 @@ class GPResult:
         NSmodel = Model(prior_model=self.prior_model, log_likelihood=self.likelihood_model)
         NSmodel.sanity_check(random.PRNGKey(10), S=100)
 
-        self.Exact_ns = ExactNestedSampler(NSmodel, num_live_points=500, max_samples=max_samples)
+        self.Exact_ns = ExactNestedSampler(NSmodel, num_live_points=500, max_samples=1e4)
         Termination_reason, State = self.Exact_ns(
             random.PRNGKey(42), term_cond=TerminationCondition(live_evidence_frac=1e-4)
         )
